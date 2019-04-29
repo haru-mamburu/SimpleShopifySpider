@@ -7,6 +7,7 @@ import time, datetime
 import logging
 import json
 import pymysql.cursors
+import multiprocessing
 
 reload(sys) 
 sys.setdefaultencoding('utf8')
@@ -15,7 +16,10 @@ MY_CONFIG_FILE = '/root/eCommerceSpiders/Config/Spider.conf'
 
 # cd /root/eCommerceSpiders/Shopify/Shopify && python Daemon.py > /dev/null 2>&1 &
 # ps -ef | grep scrapy | grep -v grep | awk '{print $2}' | xargs kill -9
+
 class ShopifySpiderDaemon:
+    sub_processes = []
+    
     # Class construction
     def __init__(self):
         # Initialize Logger
@@ -54,12 +58,17 @@ class ShopifySpiderDaemon:
         
     # Class destruction
     def __del__(self):
+        self.logger.info('Free resources before exit')
+        
+        # Kill all sub processes
+        for process in self.sub_processes:
+            os.system('kill -9 %d' % process.pid);
+        
         # Stop scrapy
-        os.system('ps -ef | grep scrapy | grep -v grep | awk \'{print $2}\' | xargs kill -9');
+        os.system("ps -ef | grep scrapy | grep -v grep | awk '{print $2}' | xargs kill -9");
         
         # Close database connector
         if self.db_connector is not None:
-            self.logger.info('close database connector before exit')
             self.db_connector.close()
         
     # Run spiders
@@ -75,7 +84,8 @@ class ShopifySpiderDaemon:
             self.logger.info('Ready to get and start spiders')
             
             # Getting all shopify spiders
-            shopify_spiders = []
+            shopify_shops = []
+            self.sub_processes = []
             with self.db_connector.cursor() as cursor:
                 sql = ('SELECT ShopID,ShopURL,UNIX_TIMESTAMP(IFNULL(LastCrawlingTime,\'2000-01-01 00:00:00\')) AS LastCrawlingTime,CrawlingFrequency,CrawlingState '
                         'FROM tShops WHERE ShopType=1 AND CrawlingState!=1;')
@@ -91,19 +101,34 @@ class ShopifySpiderDaemon:
                     }
                     if shop['crawling_freq'] <= 0:
                         shop['crawling_freq'] = 1800
-                    shopify_spiders.append(shop)
-            self.logger.info('%d spiders were ready to start' % len(shopify_spiders))
+                    
+                    # Add spider cache
+                    if self.check_shop_spider(shop) is True:
+                        shopify_shops.append(shop)
+                        
+                    # Create depend sub process for 10 spiders
+                    if len(shopify_shops) >= 10:
+                        process = multiprocessing.Process(
+                            target = self.start_scrapy_spiders, 
+                            args = (shopify_shops[:], ))
+                        process.start()
+                        self.sub_processes.append(process)
+                        shopify_shops = []
+
+            # Remaider shops
+            if len(shopify_shops) > 0:
+                process = multiprocessing.Process(
+                    target = self.start_scrapy_spiders, 
+                    args = (shopify_shops[:], ))
+                process.start()
+                self.sub_processes.append(process)
             
-            # Run spider one by one
-            for shop in shopify_spiders:
-                if self.check_shop_spider(shop) is True:
-                    cmd_line = 'scrapy crawl ShopifySpider -a shop=%s' % shop['shop_url']
-                    os.system(cmd_line)
-                time.sleep(3)
+            # Waiting for all sub processes quit
+            for process in self.sub_processes:
+                process.join()
                 
-            # Check spider every 10 minutes
+            # Next checking
             time.sleep(10)
-                
                 
     # Check whether shop spider need start
     def check_shop_spider(self, shop):
@@ -125,7 +150,14 @@ class ShopifySpiderDaemon:
             self.logger.info('Time to start spider (%s)' % shop)
             return True
             
-        return False        
-    
+        return False
+        
+    # Start scrapy spiders
+    def start_scrapy_spiders(self, shops):
+        for shop in shops:
+            cmd_line = 'scrapy crawl ShopifySpider -a shop=%s' % shop['shop_url']
+            os.system(cmd_line)
+        
+
 if __name__ == '__main__':
     ShopifySpiderDaemon().run()
