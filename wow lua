@@ -1,0 +1,31 @@
+function()
+    if UnitExists("target") then
+        print("You're targeting a " .. UnitName("target"))
+        print(IsItemInRange("835", "target") == 0)
+        if (IsItemInRange("835", "target") == 0) then 
+            print("wtf?")
+            return true
+        elseif ((IsItemInRange ("33069", "target") == 1)) then
+            print("15")
+            return true
+        else
+            return false
+        end
+    else
+        print("You have no target")
+        return false
+    end
+end
+
+
+function()
+    if UnitExists("target") then
+        if (IsItemInRange ("33069", "target") == 1) then
+            return false
+        else
+            return true
+        end
+    else
+        return true
+    end
+end
